@@ -12,9 +12,9 @@ from conftest import MMPROJ, MODEL
 
 @pytest.fixture(scope="session")
 def queue_probe(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """链接已安装的 Linux wheel，构建队列生命周期探针。"""
-    if sys.platform != "linux":
-        pytest.skip("This native probe links the Linux wheel's C++ server symbols")
+    """链接已安装 wheel 的真实服务器队列，构建生命周期探针。"""
+    if sys.platform not in {"linux", "darwin"}:
+        pytest.skip("This probe requires exported ELF/Mach-O C++ server symbols")
     import mineru_llama_cpp
 
     root = Path(__file__).resolve().parents[1]
@@ -22,6 +22,7 @@ def queue_probe(tmp_path_factory: pytest.TempPathFactory) -> Path:
     libraries = Path(mineru_llama_cpp.__file__).resolve().parent / "lib"
     executable = tmp_path_factory.mktemp("queue_lifecycle") / "probe"
     command = [*shlex.split(os.environ.get("CXX", "c++")), "-std=c++17", "-pthread", "-UNDEBUG"]
+    command += ["-I", str(root / "src/cpp")]
     for directory in ["tools/server", "common", "include", "ggml/include", "tools/mtmd", "vendor"]:
         command += ["-I", str(upstream / directory)]
     command += [
@@ -38,11 +39,14 @@ def queue_probe(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "-o",
         str(executable),
     ]
+    if sys.platform == "darwin":
+        command = [str(libraries / (arg[3:].replace(".so.0", ".0.dylib").replace(".so", ".dylib")))
+                   if arg.startswith("-l:") else arg for arg in command]
     subprocess.run(command, check=True)
     return executable
 
 
-@pytest.mark.parametrize("scenario", ["early-stop", "running-stop", "concurrent"])
+@pytest.mark.parametrize("scenario", ["early-stop", "running-stop", "concurrent", "fatal-reader"])
 def test_queue_termination_is_terminal(queue_probe: Path, scenario: str) -> None:
     # Test-only deadlock guard; this probe never loads a model or runs inference.
     """验证停止请求不会被延迟启动或并发启动覆盖。"""

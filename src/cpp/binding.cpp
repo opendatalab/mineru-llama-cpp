@@ -109,24 +109,44 @@ int integer_argument(PyObject * object) {
 }
 
 // 保留生产异常分类，将服务端错误转换为 Python 异常。
-[[noreturn]] void raise_mapped_error(const std::string & type, const std::string & message) {
+[[noreturn]] void raise_mapped_error(const std::string & type, const std::string & message,
+                                    const std::string & details = "{}") {
     OwnedRef module(checked(PyImport_ImportModule("mineru_llama_cpp.exceptions")));
     const char * name = type == "exceed_context_size_error" ? "ContextExceededError" :
-                        type == "invalid_request_error" ? "InvalidRequestError" : "EngineError";
+                        type == "invalid_request_error" ? "InvalidRequestError" :
+                        type == "engine_dead_error" ? "EngineUnavailableError" : "EngineError";
     OwnedRef exception(checked(PyObject_GetAttrString(module.get(), name)));
-    PyErr_SetString(exception.get(), message.c_str());
+    OwnedRef json_module(checked(PyImport_ImportModule("json")));
+    OwnedRef diagnostic(checked(PyObject_CallMethod(json_module.get(), "loads", "s", details.c_str())));
+    OwnedRef args(checked(Py_BuildValue("(s)", message.c_str())));
+    OwnedRef kwargs(checked(Py_BuildValue("{s:s,s:O}", "error_type", type.c_str(), "details", diagnostic.get())));
+    PyObject * code = PyDict_GetItemString(diagnostic.get(), "code");
+    if (code && PyDict_SetItemString(kwargs.get(), "code", code) < 0) throw PythonError{};
+    OwnedRef value(checked(PyObject_Call(exception.get(), args.get(), kwargs.get())));
+    PyErr_SetObject(exception.get(), value.get());
     throw PythonError{};
 }
 
-// 解析错误 JSON；无效 JSON 继续使用原字符串作为 EngineError 消息。
+// 将原生首次致命异常映射为专用类型，保留原始 C++ 类型和消息。
+[[noreturn]] void raise_engine_dead(const EngineTerminated & error) {
+    common_json details = {{"type", "engine_dead_error"}, {"code", "engine_dead"},
+                           {"message", error.what()}, {"native_type", error.native_type}};
+    raise_mapped_error("engine_dead_error", error.what(), details.dump());
+}
+
+// 解析错误 JSON 并保留完整响应；格式损坏时仍保留原始诊断文本。
 [[noreturn]] void raise_from_error_json(const std::string & text) {
     std::string type = "server_error", message = text;
+    common_json details = {{"raw_response", text}};
     try {
         auto error = common_json::parse(text);
-        type = error.value("type", type);
-        message = error.value("message", text);
+        if (error.is_object()) {
+            type = error.value("type", type);
+            message = error.value("message", text);
+            details = error;
+        }
     } catch (...) {}
-    raise_mapped_error(type, message);
+    raise_mapped_error(type, message, details.dump());
 }
 
 // 接管字典值的新引用，写入失败时也释放引用。
@@ -168,6 +188,9 @@ PyObject * decode_generated_content(const std::string & content, const std::stri
 void translate_exception() {
     try { throw; }
     catch (const PythonError &) {}
+    catch (const EngineTerminated & error) {
+        try { raise_engine_dead(error); } catch (const PythonError &) {}
+    }
     catch (const std::bad_alloc &) { PyErr_NoMemory(); }
     catch (const std::invalid_argument & error) { PyErr_SetString(PyExc_ValueError, error.what()); }
     catch (const std::out_of_range & error) { PyErr_SetString(PyExc_IndexError, error.what()); }
@@ -234,6 +257,7 @@ PyObject * core_generate(CoreObject * self, PyObject * args, PyObject * kwargs) 
         auto body = parse_body(args, kwargs);
         EngineCore::GenerateResult result;
         try { ReleasedGIL release; result = self->core->generate(body); }
+        catch (const EngineTerminated & error) { raise_engine_dead(error); }
         catch (const std::exception & error) { raise_mapped_error("invalid_request_error", error.what()); }
         if (result.is_error) raise_from_error_json(result.error_json);
         OwnedRef output(checked(PyDict_New()));
@@ -243,6 +267,15 @@ PyObject * core_generate(CoreObject * self, PyObject * args, PyObject * kwargs) 
         put(output.get(), "tokens_predicted", PyLong_FromLong(result.tokens_predicted));
         put(output.get(), "timings", timings_to_dict(result.timings));
         return output.release();
+    } catch (...) { translate_exception(); return nullptr; }
+}
+
+// 提供无模型调用、无新增任务的真实循环状态探测。
+PyObject * core_check_health(CoreObject * self, PyObject *) {
+    try {
+        require_core(self);
+        self->core->check_health();
+        return none();
     } catch (...) { translate_exception(); return nullptr; }
 }
 
@@ -259,6 +292,7 @@ PyObject * core_stream(CoreObject * self, PyObject * args, PyObject * kwargs) {
         auto body = parse_body(args, kwargs);
         std::unique_ptr<EngineCore::StreamHandle> handle;
         try { handle = std::make_unique<EngineCore::StreamHandle>(self->core->generate_stream(body)); }
+        catch (const EngineTerminated & error) { raise_engine_dead(error); }
         catch (const std::exception & error) { raise_mapped_error("invalid_request_error", error.what()); }
         auto * state = static_cast<ModuleState *>(PyType_GetModuleState(Py_TYPE(reinterpret_cast<PyObject *>(self))));
         if (!state) throw PythonError{};
@@ -312,6 +346,7 @@ PyObject * stream_next(StreamObject * self) {
 }
 
 PyMethodDef core_methods[] = {
+    {"check_health", reinterpret_cast<PyCFunction>(core_check_health), METH_NOARGS, "检查真实后台循环状态。"},
     {"generate", reinterpret_cast<PyCFunction>(core_generate), METH_VARARGS | METH_KEYWORDS, "同步生成并返回统计。"},
     {"generate_stream", reinterpret_cast<PyCFunction>(core_stream), METH_VARARGS | METH_KEYWORDS, "创建流式 reader。"},
     {nullptr, nullptr, 0, nullptr}

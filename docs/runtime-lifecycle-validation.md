@@ -61,3 +61,12 @@ CPU 按需加载改动位于 Engine；上游独立 llama-server 仍执行自己�
 结构化结果、wheel 哈希及 ELF 数据在 `build/runtime-lifecycle-final/validation.json`；
 完整测试日志为 `tests.log`，GPU 日志位于 `gpu-smoke/` 和 `gpu-engine.log`，重复配置日志为 `reconfigure.log`。
 此前的根因堆栈、符号绑定和隔离实验保留在 `build/runtime-lifecycle-diagnosis/`。
+
+
+## 0.2.1 故障状态契约补充
+
+历史验证只覆盖正常 shutdown；本轮新增循环退出锁存、明确关闭异常和异步取消排空。
+`tests/test_engine_lifecycle_state.py` 在真实 C++ 线程抛出异常，验证首次原因和终止状态；
+`tests/test_engine_failure_contract.py` 验证公开 Python 错误及取消规则；实际模型验收脚本位于
+MinerU 的 `scripts/acceptance/llama_cpp_lifecycle.py`。合成异常、真实引擎显式关闭与整个进程退出
+必须分开记录，不能据此宣称已经修复所有原生崩溃根因。

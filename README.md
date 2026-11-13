@@ -419,3 +419,26 @@ This project's own code is licensed under the [MIT License](LICENSE).
 Commercial use, modification, and redistribution are permitted, provided
 the copyright and license notices are retained. Model weights and
 third-party components remain subject to their respective licenses.
+
+## Engine lifecycle and failure contract (0.2.1)
+
+`Engine.check_health()` reads the native decode-loop lifecycle without submitting inference.
+It returns `None` while the loop has not exited. It is a liveness snapshot, not a progress
+heartbeat: a busy or hung native call is not declared dead merely for lack of output.
+
+`EngineUnavailableError(EngineError)` means this instance's loop has definitively exited.
+`EngineClosedError(EngineUnavailableError)` means the caller explicitly closed it.
+Both reject future inference. Ordinary `EngineError` and `InvalidRequestError` concern
+individual requests and do not imply permanent engine death. Errors preserve `error_type`,
+`code`, and `details`; native loop errors include the first C++ exception type and message.
+C++ has no portable traceback here; Python traceback and adapter exception chains remain available.
+
+A catchable exception escaping the decode loop is recorded, and waiting readers stop on their
+next polling interval. `abort`, access violations, and whole-process termination remain process
+supervisor responsibilities. This library neither terminates the host nor rebuilds an engine.
+
+Cancellation of `agenerate()` waits for submitted native work to finish; work still queued in
+its executor skips inference after cancellation. Explicit `astream().aclose()` or cancellation
+also drains its worker. Use `contextlib.aclosing` when stopping asynchronous iteration early.
+Drain all requests before calling `Engine.close()`/`aclose()`; the engine belongs to its caller.
+A fatal signal discovered during draining is preserved for batch error arbitration.

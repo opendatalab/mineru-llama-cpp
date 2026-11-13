@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "mineru-llama-cpp"
-version = "0.2.0"
+version = "0.2.1"
 description = "In-process llama.cpp VLM inference engine for MinerU"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -93,7 +93,7 @@ build = "cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_*"
 build-frontend = "build"
 test-requires = ["pytest", "pytest-asyncio", "pillow", "setuptools", "packaging"]
-test-command = "python {project}/tools/wheel_smoke.py --without-external-gpu-runtime && python -m pytest {project}/tests/test_output_utf8.py {project}/tests/test_backend_policy.py {project}/tests/test_binding_contract.py {project}/tests/test_optional_backend_load.py {project}/tests/test_cpu_topology.py {project}/tests/test_runtime_loading.py {project}/tests/test_queue_lifecycle.py {project}/tests/test_wheel_policy.py -q"
+test-command = "python {project}/tools/wheel_smoke.py --without-external-gpu-runtime && python -m pytest {project}/tests/test_output_utf8.py {project}/tests/test_backend_policy.py {project}/tests/test_binding_contract.py {project}/tests/test_optional_backend_load.py {project}/tests/test_cpu_topology.py {project}/tests/test_runtime_loading.py {project}/tests/test_queue_lifecycle.py {project}/tests/test_wheel_policy.py {project}/tests/test_engine_failure_contract.py -q"
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 
@@ -121,4 +121,4 @@ inherit = { "environment" = "none", "before-all" = "none", "before-build" = "non
 environment = { CMAKE_GENERATOR = "Ninja", VULKAN_SDK = "C:/VulkanSDK-ARM64", SKBUILD_CMAKE_ARGS = "-DCMAKE_C_COMPILER=clang-cl;-DCMAKE_CXX_COMPILER=clang-cl;-DGGML_OPENMP=OFF;-DGGML_VULKAN=ON;-DVulkan_LIBRARY=C:/VulkanSDK-ARM64/Lib/vulkan-1.lib;-DVulkan_GLSLC_EXECUTABLE=C:/VulkanSDK-ARM64/Bin/glslc.exe" }
 before-all = "pip install ninja cmake && python {project}/tools/setup_windows_gpu.py --arch ARM64"
 before-build = "python {project}/tools/clean_native_artifacts.py"
-test-command = "python {project}/tools/windows_vulkan_smoke.py && python {project}/tools/wheel_smoke.py --without-external-gpu-runtime && python -m pytest {project}/tests/test_output_utf8.py {project}/tests/test_backend_policy.py {project}/tests/test_binding_contract.py {project}/tests/test_optional_backend_load.py {project}/tests/test_cpu_topology.py {project}/tests/test_runtime_loading.py {project}/tests/test_queue_lifecycle.py {project}/tests/test_wheel_policy.py -q"
+test-command = "python {project}/tools/windows_vulkan_smoke.py && python {project}/tools/wheel_smoke.py --without-external-gpu-runtime && python -m pytest {project}/tests/test_output_utf8.py {project}/tests/test_backend_policy.py {project}/tests/test_binding_contract.py {project}/tests/test_optional_backend_load.py {project}/tests/test_cpu_topology.py {project}/tests/test_runtime_loading.py {project}/tests/test_queue_lifecycle.py {project}/tests/test_wheel_policy.py {project}/tests/test_engine_failure_contract.py -q"

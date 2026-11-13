@@ -357,12 +357,13 @@ EngineCore::EngineCore(const std::string & model_path, const std::string & mmpro
         throw;
     }
     meta_ = std::make_unique<server_context_meta>(ctx_.get_meta());
-    loop_thread_ = std::thread([this] { ctx_.start_loop(); });
+    loop_thread_ = std::thread([this] { lifecycle_.run([this] { ctx_.start_loop(); }); });
     started_ = true;
 }
 
 EngineCore::~EngineCore() {
     if (started_) {
+        lifecycle_.begin_close();
         ctx_.terminate();
         if (loop_thread_.joinable()) loop_thread_.join();
     }
@@ -370,6 +371,7 @@ EngineCore::~EngineCore() {
 }
 
 EngineCore::GenerateResult EngineCore::generate(const std::string & body_json) {
+    check_health();
     // 无效 JSON 的 common_json_error 继续在绑定层映射为请求异常。
     json body = json::parse(body_json);
 
@@ -397,10 +399,12 @@ EngineCore::GenerateResult EngineCore::generate(const std::string & body_json) {
         task.cli_files  = std::move(files);
     }
 
+    check_health();
     rd.post_task(std::move(task));
 
     GenerateResult result;
-    auto r = rd.next([]() { return false; });  // blocks until the result arrives; no GIL concept at this layer
+    auto r = rd.next([this]() { return lifecycle_.stopped(); });
+    check_health();
     if (!r) {
         result.is_error   = true;
         result.error_json = R"json({"type":"server_error","message":"no result (stopped)"})json";
@@ -421,8 +425,8 @@ EngineCore::GenerateResult EngineCore::generate(const std::string & body_json) {
     return result;
 }
 
-EngineCore::StreamHandle::StreamHandle(std::unique_ptr<server_response_reader> rd)
-    : rd_(std::move(rd)) {}
+EngineCore::StreamHandle::StreamHandle(std::unique_ptr<server_response_reader> rd, const EngineLifecycle & lifecycle)
+    : rd_(std::move(rd)), lifecycle_(lifecycle) {}
 
 EngineCore::Chunk EngineCore::StreamHandle::next_chunk() {
     Chunk chunk;
@@ -435,7 +439,9 @@ EngineCore::Chunk EngineCore::StreamHandle::next_chunk() {
         return chunk;
     }
 
-    auto r = rd_->next([]() { return false; });
+    lifecycle_.check_health();
+    auto r = rd_->next([this]() { return lifecycle_.stopped(); });
+    lifecycle_.check_health();
     if (!r) {
         chunk.is_error   = true;
         chunk.error_json = R"json({"type":"server_error","message":"no result (stopped)"})json";
@@ -469,6 +475,7 @@ EngineCore::Chunk EngineCore::StreamHandle::next_chunk() {
 }
 
 EngineCore::StreamHandle EngineCore::generate_stream(const std::string & body_json) {
+    check_health();
     json body = json::parse(body_json);  // throws on malformed input; propagates to binding layer
 
     // IMPORTANT: construct the ONE server_response_reader that will live for
@@ -509,6 +516,7 @@ EngineCore::StreamHandle EngineCore::generate_stream(const std::string & body_js
         task.cli_files  = std::move(files);
     }
 
+    check_health();
     reader->post_task(std::move(task));
-    return StreamHandle(std::move(reader));  // only the unique_ptr moves; the reader's identity never changes
+    return StreamHandle(std::move(reader), lifecycle_);  // reader 身份及生命周期引用随迭代器保留。
 }
