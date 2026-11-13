@@ -5,6 +5,7 @@
 #include "server-context.h"
 #include "server-queue.h"
 #include "server-task.h"
+#include "engine_lifecycle.h"
 
 #include <cstdint>
 #include <memory>
@@ -86,7 +87,7 @@ public:
     // rd_ to a by-value server_response_reader member.
     class StreamHandle {
     public:
-        explicit StreamHandle(std::unique_ptr<server_response_reader> rd);
+        explicit StreamHandle(std::unique_ptr<server_response_reader> rd, const EngineLifecycle & lifecycle);
         // Blocks until the next token (or the final chunk, or an error) is
         // ready. May throw std::exception for pre-post errors, but in
         // practice those all happen inside generate_stream() before a
@@ -96,6 +97,7 @@ public:
 
     private:
         std::unique_ptr<server_response_reader> rd_;
+        const EngineLifecycle & lifecycle_;
         bool done_ = false;
     };
 
@@ -111,12 +113,16 @@ public:
     // token gets rendered as literal text instead of being silently dropped.
     const std::string & eos_token_str() const { return meta_->eos_token_str; }
 
+    // 暴露真实后台循环状态；不读取或修改上游私有任务。
+    void check_health() const { lifecycle_.check_health(); }
+
 private:
     server_context                        ctx_;
     common_params                         params_;
     std::unique_ptr<server_context_meta>  meta_;
     std::thread                           loop_thread_;
     bool                                  started_ = false;
+    EngineLifecycle                       lifecycle_;
 
     // Guards oaicompat_chat_params_parse() + eval_llama_cmpl_schema() +
     // post_task() for both generate() and generate_stream(). Fixes the

@@ -7,9 +7,10 @@ import json
 import threading
 from pathlib import Path
 from types import TracebackType
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Callable, Iterator, TypeVar
 
 from ._mineru_llama_cpp import _EngineCore
+from .exceptions import EngineClosedError, EngineUnavailableError
 from .sampling import SamplingParams
 from .types import GenerateChunk, GenerateResult, GenerationTimings, Messages
 from .verbosity import LOG_LEVEL_WARN
@@ -41,6 +42,46 @@ def _timings_from_dict(d: dict | None) -> GenerationTimings | None:
     if d is None:
         return None
     return GenerationTimings(**d)
+
+
+_Result = TypeVar("_Result")
+
+
+async def _wait_until_complete(
+    work: asyncio.Future[_Result], cancelled: threading.Event | None = None
+) -> _Result:
+    """取消后排空已提交线程，明确死亡优先上报，其他情形保留调用方取消。"""
+    try:
+        await asyncio.wait([work])
+        return work.result()
+    except asyncio.CancelledError:
+        if cancelled is not None:
+            cancelled.set()
+        while not work.done():
+            try:
+                await asyncio.wait([work])
+            except asyncio.CancelledError:
+                continue
+        if not work.cancelled():
+            error = work.exception()
+            if isinstance(error, EngineUnavailableError):
+                raise error
+        raise
+
+
+async def _run_in_thread(function: Callable[[], _Result]) -> _Result:
+    """未开始的工作取消后跳过执行；已开始的工作等待结束再交还控制权。"""
+    cancelled = threading.Event()
+
+    def run() -> _Result | None:
+        """在线程开始时检查取消，避免排队任务在取消后启动迟到推理。"""
+        if cancelled.is_set():
+            return None
+        return function()
+
+    return await _wait_until_complete(
+        asyncio.get_running_loop().run_in_executor(None, run), cancelled
+    )
 
 
 class Engine:
@@ -95,7 +136,9 @@ class Engine:
         # cryptic assert deep inside llama.cpp) rather than a clear error here.
         # n_ctx_seq == 0 is valid and means "use the model's training context".
         if n_ctx_seq < 0:
-            raise ValueError(f"n_ctx_seq must be >= 0 (0 = model training context), got {n_ctx_seq}")
+            raise ValueError(
+                f"n_ctx_seq must be >= 0 (0 = model training context), got {n_ctx_seq}"
+            )
         if n_parallel < 1:
             raise ValueError(f"n_parallel must be >= 1, got {n_parallel}")
         # Round a nonzero n_ctx_seq up to a multiple of 256 so it survives
@@ -106,7 +149,13 @@ class Engine:
         if n_ctx_seq > 0 and n_ctx_seq % 256 != 0:
             n_ctx_seq = ((n_ctx_seq + 255) // 256) * 256
         self._core = _EngineCore(
-            str(model), str(mmproj), n_ctx_seq, n_gpu_layers, n_parallel, verbosity, n_threads
+            str(model),
+            str(mmproj),
+            n_ctx_seq,
+            n_gpu_layers,
+            n_parallel,
+            verbosity,
+            n_threads,
         )
         # The engine is constructed with special=true (see engine_core.cpp),
         # which is needed to keep MinerU's structured tokens (<|box_start|>
@@ -119,8 +168,14 @@ class Engine:
         # find_stopping_strings()/erase() in process_token().
         self._eos_token_str: str = self._core.eos_token_str
 
-    def _build_body(self, messages: Messages, sampling_params: SamplingParams | None, stream: bool) -> str:
-        body: dict = {"model": "mineru-llama-cpp", "messages": messages, "stream": stream}
+    def _build_body(
+        self, messages: Messages, sampling_params: SamplingParams | None, stream: bool
+    ) -> str:
+        body: dict = {
+            "model": "mineru-llama-cpp",
+            "messages": messages,
+            "stream": stream,
+        }
         if sampling_params is not None:
             body.update(sampling_params.to_json_fields())
         # Default, not an override -- see _VALID_UNICODE_GRAMMAR's
@@ -140,8 +195,9 @@ class Engine:
     ) -> GenerateResult:
         """Blocking call. Raises InvalidRequestError/ContextExceededError/
         EngineError on failure (see exceptions.py)."""
+        core = self._require_core()
         body = self._build_body(messages, sampling_params, stream=False)
-        d = self._core.generate(body)
+        d = core.generate(body)
         return GenerateResult(
             content=d["content"],
             finish_reason=d["finish_reason"],
@@ -157,8 +213,7 @@ class Engine:
     ) -> GenerateResult:
         """Async version of generate(), bridged via run_in_executor — does
         not block the event loop."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.generate, messages, sampling_params)
+        return await _run_in_thread(lambda: self.generate(messages, sampling_params))
 
     # --- streaming ---
 
@@ -170,8 +225,9 @@ class Engine:
         """Synchronous generator, yields one GenerateChunk per token. The
         final chunk has finish_reason set (all others have it as None) —
         check `chunk.finish_reason is not None` to detect the end."""
+        core = self._require_core()
         body = self._build_body(messages, sampling_params, stream=True)
-        core_iter = self._core.generate_stream(body)
+        core_iter = core.generate_stream(body)
         for c in core_iter:
             yield GenerateChunk(
                 delta=c["delta"],
@@ -198,32 +254,62 @@ class Engine:
         abandoning this generator before it's exhausted) does not cancel
         the underlying generation — the background thread runs to
         completion regardless, occupying a slot until the model finishes.
+        Explicit aclose() or cancellation waits for that work to drain.
         """
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue = asyncio.Queue()
         _SENTINEL = object()
 
+        abandoned = threading.Event()
+        work: asyncio.Future[None] = loop.create_future()
+
         def _run() -> None:
+            """在工作线程生成，消费者退出后仅排空而不继续缓存文本。"""
+            fatal: EngineUnavailableError | None = None
             try:
                 for chunk in self.stream(messages, sampling_params):
-                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                    if not abandoned.is_set():
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
             except Exception as exc:  # noqa: BLE001 - relayed to the consumer, not swallowed
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
+                if isinstance(exc, EngineUnavailableError):
+                    fatal = exc
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+                if fatal is not None:
+                    loop.call_soon_threadsafe(work.set_exception, fatal)
+                else:
+                    loop.call_soon_threadsafe(work.set_result, None)
 
+        # 保留独立流线程，避免同步流占满共享 executor 后阻塞其他异步调用。
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
-
-        while True:
-            item = await queue.get()
-            if item is _SENTINEL:
-                break
-            if isinstance(item, Exception):
-                raise item
-            yield item
+        try:
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            abandoned.set()
+            await _wait_until_complete(work)
 
     # --- lifecycle ---
+
+    def _require_core(self) -> _EngineCore:
+        """在读取或生成前拒绝已关闭实例，并持有局部引用直至本次调用排空。"""
+        with self._close_lock:
+            if self._closed:
+                raise EngineClosedError(
+                    "engine is closed", error_type="engine_closed", code="engine_closed"
+                )
+            return self._core
+
+    def check_health(self) -> None:
+        """查询原生循环终止状态；活着但卡住的循环不伪称已死亡，不发送推理任务。"""
+        self._require_core().check_health()
 
     def close(self) -> None:
         """Explicit shutdown: terminate + join the background loop thread,
@@ -239,13 +325,14 @@ class Engine:
             if self._closed:
                 return
             self._closed = True
-            del self._core  # drops the last reference -> EngineCore's C++ destructor runs now
+            # drops the last reference -> EngineCore's C++ destructor runs now
+            del self._core
 
     async def aclose(self) -> None:
         """Async version of close(), offloaded to a thread so it doesn't
         block the event loop while the loop thread joins."""
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.close)
+        await _wait_until_complete(loop.run_in_executor(None, self.close))
 
     def __enter__(self) -> Engine:
         return self

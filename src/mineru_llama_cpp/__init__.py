@@ -36,6 +36,8 @@ from .engine import Engine
 from .exceptions import (
     ContextExceededError,
     EngineError,
+    EngineClosedError,
+    EngineUnavailableError,
     InvalidRequestError,
     MineruLlamaCppError,
 )
@@ -67,6 +69,8 @@ __all__ = [
     "InvalidRequestError",
     "ContextExceededError",
     "EngineError",
+    "EngineClosedError",
+    "EngineUnavailableError",
     "Message",
     "Messages",
     "ContentPart",

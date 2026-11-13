@@ -4,6 +4,9 @@ __all__: list[str] = list()
 class _EngineCore:
     def __init__(self, model_path: str, mmproj_path: str, n_ctx_seq: typing.SupportsInt | typing.SupportsIndex, n_gpu_layers: typing.SupportsInt | typing.SupportsIndex, n_parallel: typing.SupportsInt | typing.SupportsIndex, verbosity: typing.SupportsInt | typing.SupportsIndex, n_threads: typing.SupportsInt | typing.SupportsIndex) -> None:
         ...
+    def check_health(self) -> None:
+        """查询原生循环状态，退出时抛出专用异常。"""
+        ...
     def generate(self, body: str) -> dict:
         ...
     def generate_stream(self, body: str) -> _StreamIterator:

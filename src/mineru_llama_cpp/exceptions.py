@@ -10,6 +10,19 @@ raise_mapped_error() to match.
 class MineruLlamaCppError(Exception):
     """Base class for all exceptions raised by this library."""
 
+    def __init__(
+        self,
+        *args: object,
+        error_type: str | None = None,
+        code: int | str | None = None,
+        details: dict | None = None,
+    ) -> None:
+        """保留原始类型、错误码和完整服务响应，避免上层只能按消息猜测分类。"""
+        super().__init__(*args)
+        self.error_type = error_type
+        self.code = code
+        self.details = dict(details or {})
+
 
 class InvalidRequestError(MineruLlamaCppError):
     """The request itself was invalid: malformed JSON, bad image data, etc.
@@ -43,3 +56,11 @@ class EngineError(MineruLlamaCppError):
     not_supported_error, unavailable_error) or to an unrecognized/missing
     "type" field.
     """
+
+
+class EngineUnavailableError(EngineError):
+    """已确认后台循环退出，此实例永久不可复用；普通 EngineError 不代表死亡。"""
+
+
+class EngineClosedError(EngineUnavailableError):
+    """调用方已关闭实例；后续请求须使用显式新建的引擎。"""
