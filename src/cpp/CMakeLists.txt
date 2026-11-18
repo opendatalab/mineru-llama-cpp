@@ -32,6 +32,8 @@ target_include_directories(_mineru_llama_cpp PRIVATE
 
 target_link_libraries(_mineru_llama_cpp PRIVATE
     server-context
+    # server-common 使用 httplib::hosted_at，上游 server-context 未传递此静态库。
+    cpp-httplib
     llama-common-base
     llama-common
     mtmd
