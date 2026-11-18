@@ -126,10 +126,12 @@ void log_packaged_backend_status(const std::filesystem::path & directory) {
 
 // CPU 请求只加载计算后端，其余请求沿用完整后端发现流程。
 void load_packaged_backends_from(const std::filesystem::path & directory, bool cpu_only) {
+    // ggml 按 UTF-8 读取显式目录，Windows 本机代码页可能无法表示完整的安装路径。
+    const auto directory_utf8 = directory.u8string();
     if (cpu_only) {
-        ggml_backend_load_cpu_from_path(directory.string().c_str());
+        ggml_backend_load_cpu_from_path(directory_utf8.c_str());
     } else {
-        ggml_backend_load_all_from_path(directory.string().c_str());
+        ggml_backend_load_all_from_path(directory_utf8.c_str());
         log_packaged_backend_status(directory);
     }
 }
@@ -193,10 +195,6 @@ void load_packaged_backends(bool cpu_only) {
     const std::filesystem::path module_dir = std::filesystem::path(std::wstring(path_buf, len)).parent_path();
 
     // Same three candidate layouts as Linux/macOS -- see the comment there.
-    // ggml_backend_load_all_from_path takes a const char *, so we need the
-    // directory's narrow-string form. std::filesystem::path::string() yields
-    // the system's default codepage (CP_ACP on Windows); for ASCII-only
-    // install paths this is fine, and our directory name "bin" is ASCII.
     const std::filesystem::path candidates[] = {
         module_dir / "bin",
         module_dir.parent_path() / "bin",

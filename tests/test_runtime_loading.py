@@ -92,6 +92,37 @@ else:
     assert marker.exists() is probes_gpu
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows native path encoding")
+@pytest.mark.parametrize("folder", ["ascii", "中文", "🚀"], ids=["ascii", "chinese", "emoji"])
+@pytest.mark.parametrize("layers", [0, 99], ids=["cpu-only", "all-backends"])
+def test_windows_backend_install_path(tmp_path: Path, folder: str, layers: int) -> None:
+    """从指定目录加载真实 wheel 的扩展和后端，两种发现模式都必须走到模型加载阶段。"""
+    import mineru_llama_cpp
+
+    install_dir = tmp_path / folder
+    shutil.copytree(Path(mineru_llama_cpp.__file__).resolve().parent, install_dir / "mineru_llama_cpp")
+    script = """
+import sys
+from pathlib import Path
+from mineru_llama_cpp import Engine, _mineru_llama_cpp
+
+assert Path(_mineru_llama_cpp.__file__).resolve().parent == Path.cwd() / "mineru_llama_cpp"
+try:
+    Engine("missing.gguf", "missing-mmproj.gguf", n_ctx_seq=256, n_gpu_layers=int(sys.argv[1]), n_parallel=1)
+except RuntimeError as error:
+    if str(error) != "load_model failed":
+        raise
+else:
+    raise AssertionError("Missing model unexpectedly loaded")
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(layers)],
+        cwd=install_dir,
+        env=subprocess_environment(install_dir),
+        check=True,
+    )
+
+
 def test_cpu_variant_selection_requires_scoring_entrypoint(tmp_path: Path) -> None:
     """验证可评分 CPU 变体能被选中，无评分模块不能冒充变体。"""
     import mineru_llama_cpp
