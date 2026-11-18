@@ -20,7 +20,7 @@ def test_optional_backend_failure_keeps_cpu_available(tmp_path):
     command.run()
     module = command.get_ext_fullpath("_optional_backend_test")
     package = Path(mineru_llama_cpp.__file__).resolve().parent
-    name = "ggml.dll" if sys.platform == "win32" else "libggml.0.dylib" if sys.platform == "darwin" else "libggml.so.0"
+    name = "ggml.dll" if sys.platform == "win32" else "libggml.1.dylib" if sys.platform == "darwin" else "libggml.so.1"
     library_path = next(package / directory / name for directory in ("lib", "bin") if (package / directory / name).exists())
     library = ctypes.CDLL(str(library_path))
     library.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]

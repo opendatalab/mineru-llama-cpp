@@ -30,17 +30,17 @@ def queue_probe(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "-L",
         str(libraries),
         "-l:libllama-server-impl.so",
-        "-l:libllama-common.so.0",
-        "-l:libllama.so.0",
-        "-l:libmtmd.so.0",
-        "-l:libggml.so.0",
-        "-l:libggml-base.so.0",
+        "-l:libllama-common.so.1",
+        "-l:libllama.so.1",
+        "-l:libmtmd.so.1",
+        "-l:libggml.so.1",
+        "-l:libggml-base.so.1",
         f"-Wl,-rpath,{libraries}",
         "-o",
         str(executable),
     ]
     if sys.platform == "darwin":
-        command = [str(libraries / (arg[3:].replace(".so.0", ".0.dylib").replace(".so", ".dylib")))
+        command = [str(libraries / (arg[3:].replace(".so.1", ".1.dylib").replace(".so", ".dylib")))
                    if arg.startswith("-l:") else arg for arg in command]
     subprocess.run(command, check=True)
     return executable
