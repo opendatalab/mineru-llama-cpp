@@ -370,37 +370,33 @@ EngineCore::~EngineCore() {
     llama_backend_free();
 }
 
-EngineCore::GenerateResult EngineCore::generate(const std::string & body_json) {
+// 同步和流式请求共用独立的模板会话，排队后由服务器线程完成图文分词。
+void EngineCore::post_chat_task(server_response_reader & reader, const std::string & body_json, bool stream) {
     check_health();
-    // 无效 JSON 的 common_json_error 继续在绑定层映射为请求异常。
     json body = json::parse(body_json);
-
-    server_response_reader rd = ctx_.get_response_reader();
-    server_task task(SERVER_TASK_TYPE_COMPLETION);
-
+    common_chat_session session;
+    std::vector<server_task> tasks;
+    auto & task = tasks.emplace_back(SERVER_TASK_TYPE_COMPLETION);
     {
         std::lock_guard<std::mutex> lk(parse_mu_);
-        task.id = rd.get_new_id();
-
-        std::vector<raw_buffer> files;
-        // Reuses llama-server's own OpenAI-compatible chat parsing ("Path A"):
-        // renders the jinja chat template, extracts image_url data URIs into
-        // files, and normalizes sampling params into `parsed`. Throws
-        // std::runtime_error/std::invalid_argument on bad image_url etc.
-        json parsed = oaicompat_chat_params_parse(body, meta_->chat_params, files);
+        task.id = reader.get_new_id();
         const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_.get_llama_context()));
-        task.params = server_schema::eval_llama_cmpl_schema(
-            vocab, params_, meta_->logit_bias_eog, parsed);
-        task.params.stream       = false;
-        task.params.res_type     = TASK_RESPONSE_TYPE_NONE;
-        task.params.cache_prompt = false;  // don't reuse KV across requests (fixes Tier2 #3's "empty prompt" bug)
-        task.cli        = true;
+        json parsed = oaicompat_chat_params_parse(vocab, body, meta_->chat_params, task.cli_files, session);
+        task.params = server_schema::eval_llama_cmpl_schema(vocab, params_, meta_->logit_bias_eog, parsed);
+        task.params.stream = stream;
+        task.params.res_type = TASK_RESPONSE_TYPE_NONE;
+        task.params.cache_prompt = false;
+        task.cli = true;
         task.cli_prompt = parsed.at("prompt").get<std::string>();
-        task.cli_files  = std::move(files);
+        task.apply_chat_session(session);
     }
-
     check_health();
-    rd.post_task(std::move(task));
+    reader.post_tasks(std::move(tasks), session);
+}
+
+EngineCore::GenerateResult EngineCore::generate(const std::string & body_json) {
+    server_response_reader rd = ctx_.get_response_reader();
+    post_chat_task(rd, body_json, false);
 
     GenerateResult result;
     auto r = rd.next([this]() { return lifecycle_.stopped(); });
@@ -475,48 +471,8 @@ EngineCore::Chunk EngineCore::StreamHandle::next_chunk() {
 }
 
 EngineCore::StreamHandle EngineCore::generate_stream(const std::string & body_json) {
-    check_health();
-    json body = json::parse(body_json);  // throws on malformed input; propagates to binding layer
-
-    // IMPORTANT: construct the ONE server_response_reader that will live for
-    // this stream's entire lifetime, then mutate it in place through the
-    // pointer (get_new_id(), post_task()) — never copy or move the
-    // underlying object again after this line.
-    //
-    // Note on the line below: std::make_unique<T>(get_response_reader())
-    // does NOT elide a copy here — make_unique takes its argument through a
-    // forwarding-reference template parameter, which is not a
-    // guaranteed-copy-elision context, so the compiler genuinely invokes
-    // server_response_reader's implicit copy constructor once (confirmed via
-    // -Wdeprecated-copy-with-user-provided-dtor). This is harmless ONLY
-    // because the reader returned by get_response_reader() is still empty
-    // (no task posted, id_tasks empty) at this exact point, so the copy's
-    // destructor-triggered stop() is a no-op. The invariant we must actually
-    // preserve is: never touch a *populated* reader (one that has had
-    // post_task() called on it) through anything other than the single
-    // unique_ptr from here on — see the correctness note at the top of
-    // Phase B.
-    auto reader = std::make_unique<server_response_reader>(ctx_.get_response_reader());
-
-    server_task task(SERVER_TASK_TYPE_COMPLETION);
-    {
-        std::lock_guard<std::mutex> lk(parse_mu_);
-        task.id = reader->get_new_id();
-
-        std::vector<raw_buffer> files;
-        json parsed = oaicompat_chat_params_parse(body, meta_->chat_params, files);
-        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_.get_llama_context()));
-        task.params = server_schema::eval_llama_cmpl_schema(
-            vocab, params_, meta_->logit_bias_eog, parsed);
-        task.params.stream       = true;
-        task.params.res_type     = TASK_RESPONSE_TYPE_NONE;
-        task.params.cache_prompt = false;
-        task.cli        = true;
-        task.cli_prompt = parsed.at("prompt").get<std::string>();
-        task.cli_files  = std::move(files);
-    }
-
-    check_health();
-    reader->post_task(std::move(task));
+    // 直接构造最终迭代器持有的 reader；带有在途任务的 reader 析构会取消请求。
+    auto reader = std::unique_ptr<server_response_reader>(new server_response_reader(ctx_.get_response_reader()));
+    post_chat_task(*reader, body_json, true);
     return StreamHandle(std::move(reader), lifecycle_);  // reader 身份及生命周期引用随迭代器保留。
 }

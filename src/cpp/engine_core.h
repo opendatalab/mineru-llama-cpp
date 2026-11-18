@@ -117,6 +117,9 @@ public:
     void check_health() const { lifecycle_.check_health(); }
 
 private:
+    // 准备单次对话任务，并将同一模板会话传给响应读取器。
+    void post_chat_task(server_response_reader & reader, const std::string & body_json, bool stream);
+
     server_context                        ctx_;
     common_params                         params_;
     std::unique_ptr<server_context_meta>  meta_;
@@ -124,11 +127,6 @@ private:
     bool                                  started_ = false;
     EngineLifecycle                       lifecycle_;
 
-    // Guards oaicompat_chat_params_parse() + eval_llama_cmpl_schema() +
-    // post_task() for both generate() and generate_stream(). Fixes the
-    // "concurrent generate() calls corrupt each other's prompt" bug found
-    // during technical validation (Tier2 #3). Deliberately does NOT guard
-    // the blocking wait for a result — multiple slots must be able to decode
-    // in parallel. See design spec §4.2 point 1.
+    // 保护共享模板的解析；等待槽位和解码时允许其他请求并行。
     std::mutex parse_mu_;
 };

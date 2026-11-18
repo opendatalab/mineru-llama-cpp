@@ -1,6 +1,6 @@
 Fix: CLI-tokenized task gets tokenized twice when deferred for a free slot
 
-Base commit: 86a283532072722c5f3363d37d59a874d09fa99b
+Base commit: 401563f10ec60754e688cd3165c1343cf4be9642
 
 Root cause: process_single_task() tokenizes task.cli_prompt via
 tokenize_cli_input() and never resets task.cli back to false. If no slot is
@@ -23,17 +23,47 @@ Symptom: with N concurrent requests > n_parallel slots, the requests that
 have to wait for a slot to free up return empty content instead of their
 generated text.
 
+Apply chat message delimiters after CLI tokenization, when media and text token positions are known.
+
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index 1e3021d..538820c 100644
+index 0cdc022..1ad3231 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -2452,6 +2452,9 @@ private:
+@@ -2587,6 +2587,11 @@ private:
              }
              task.cli_prompt.clear();
              task.cli_files.clear();
-+            task.cli = false; // prevent re-tokenizing an already-cleared cli_prompt if this
-+                               // task gets deferred (no free slot) and later re-dequeued --
-+                               // process_single_task() re-checks task.cli on every dequeue
++            if (!task.cli_message_delimiters.delimiters.empty()) {
++                task.params.message_spans = task.tokens.find_message_spans(task.cli_message_delimiters);
++                task.cli_message_delimiters = {};
++            }
++            task.cli = false; // 已完成分词，排队等待空闲槽位后可直接复用 tokens。
          } catch (const std::exception & e) {
              send_error(task, std::string("Failed to format input: ") + e.what(), ERROR_TYPE_INVALID_REQUEST);
              return false;
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index aa6b779..0df77d8 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -190,6 +190,8 @@ struct server_task {
+     bool                    cli = false;
+     std::string             cli_prompt;
+     std::vector<raw_buffer> cli_files;
++    // CLI 延迟到服务器线程分词，届时才能定位消息边界。
++    common_chat_msg_delimiters cli_message_delimiters;
+ 
+     server_task_type type;
+ 
+@@ -311,7 +313,11 @@ struct server_task {
+         session.apply_sampling(params.sampling);
+         params.chat_format = session.format();
+         params.antiprompt.insert(params.antiprompt.end(), session.additional_stops().begin(), session.additional_stops().end());
+-        params.message_spans = tokens.find_message_spans(session.message_delimiters());
++        if (cli) {
++            cli_message_delimiters = session.message_delimiters();
++        } else {
++            params.message_spans = tokens.find_message_spans(session.message_delimiters());
++        }
+     }
+ 
+     void add_child(int id_parent, int id_child) {

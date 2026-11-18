@@ -1,6 +1,7 @@
 """验证上游升级后 JSON、流式边界和统计字段的 Python 契约。"""
 
 import asyncio
+import json
 
 import pytest
 
@@ -14,6 +15,23 @@ def test_invalid_json_request_does_not_poison_engine(engine, body):
         engine._core.generate(body)
     result = engine.generate([{"role": "user", "content": "hi"}], SamplingParams(n_predict=4))
     assert result.content
+
+
+def test_chat_session_applies_template_grammar_to_generate_and_stream(engine):
+    """验证会话产生的 JSON Schema 约束在整段和流式请求中均交给采样器。"""
+    schema = {"type": "object", "properties": {"value": {"const": "sync"}},
+              "required": ["value"], "additionalProperties": False}
+    body = {
+        "messages": [{"role": "user", "content": "Name a fruit."}],
+        "response_format": {"type": "json_schema", "json_schema": {"name": "result", "schema": schema}},
+        "temperature": 0.0,
+        "max_tokens": 32,
+        "stop": [engine._core.eos_token_str],
+    }
+    result = engine._core.generate(json.dumps(body))
+    assert json.loads(result["content"]) == {"value": "sync"}
+    chunks = engine._core.generate_stream(json.dumps({**body, "stream": True}))
+    assert json.loads("".join(chunk["delta"] for chunk in chunks)) == {"value": "sync"}
 
 
 def test_serialized_timings_and_stream_boundaries(engine):

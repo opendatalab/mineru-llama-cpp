@@ -135,7 +135,7 @@ def test_private_runtime_symbols_are_not_exported(monkeypatch: pytest.MonkeyPatc
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "tools"))
     from repair_linux_wheel import inspect_runtime_exports
 
-    library = Path(mineru_llama_cpp.__file__).resolve().parent / "lib/libllama.so.0"
+    library = Path(mineru_llama_cpp.__file__).resolve().parent / "lib/libllama.so.1"
     assert inspect_runtime_exports(library) == set()
 
 
