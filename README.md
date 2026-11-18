@@ -5,7 +5,8 @@ In-process llama.cpp VLM inference engine for MinerU, exposing a single
 Wraps a pinned build of [llama.cpp](https://github.com/ggml-org/llama.cpp)
 (no HTTP layer, no subprocess) via the CPython Limited API.
 
-Version 0.2.2 pins llama.cpp to `b12503`
+Version 0.2.3 supports Windows installation paths containing Chinese characters
+or emoji and pins llama.cpp to `b12503`
 (`4577932fab595eaa8b27ad71734d5de1f3c07d8c`) and uses the CPython 3.11
 stable ABI. Version 0.2.1 used `b11524`. macOS source builds and
 wheels require macOS 14 or newer. Older 0.1.2 wheels retain their original
@@ -41,11 +42,11 @@ Key build decisions (all in top-level `CMakeLists.txt`):
 
 ## CI wheels
 
-Version 0.2.2 targets five `cp311-abi3` wheels. A wheel is reused across
+Version 0.2.3 targets five `cp311-abi3` wheels. A wheel is reused across
 standard, GIL-enabled CPython 3.11–3.14, with installation tests on each
-version. Install with `python -m pip install --upgrade mineru-llama-cpp==0.2.2`,
+version. Install with `python -m pip install --upgrade mineru-llama-cpp==0.2.3`,
 or download the wheel matching your platform from the
-[0.2.2 GitHub Release](https://github.com/opendatalab/mineru-llama-cpp/releases/tag/v0.2.2).
+[0.2.3 GitHub Release](https://github.com/opendatalab/mineru-llama-cpp/releases/tag/v0.2.3).
 Previously released [0.1.5 wheels](https://github.com/opendatalab/mineru-llama-cpp/releases/tag/v0.1.5)
 retain their `cp310-abi3` tags and six-platform
 matrix; this support change applies to new builds. Validation for the new
