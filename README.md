@@ -5,8 +5,8 @@ In-process llama.cpp VLM inference engine for MinerU, exposing a single
 Wraps a pinned build of [llama.cpp](https://github.com/ggml-org/llama.cpp)
 (no HTTP layer, no subprocess) via the CPython Limited API.
 
-This source tree pins llama.cpp to `b12499`
-(`401563f10ec60754e688cd3165c1343cf4be9642`) and uses the CPython 3.11
+This source tree pins llama.cpp to `b12503`
+(`4577932fab595eaa8b27ad71734d5de1f3c07d8c`) and uses the CPython 3.11
 stable ABI. The published 0.2.1 wheels use `b11524`. macOS source builds and
 wheels require macOS 14 or newer. Older 0.1.2 wheels retain their original
 upstream version and deployment targets.
@@ -14,7 +14,7 @@ upstream version and deployment targets.
 ## Status
 
 The performance figures below describe earlier validated builds. The current
-upstream upgrade has its own [validation report](docs/llama-b12499-validation.md);
+upstream upgrade has its own [validation report](docs/llama-b12503-validation.md);
 pending platforms are not covered by these historical measurements.
 
 **Verified on 4 platforms** (build + import + text generate + two-step
